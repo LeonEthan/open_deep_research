@@ -684,6 +684,10 @@ def is_token_limit_exceeded(exception: Exception, model_name: str = None) -> boo
             provider = 'anthropic'
         elif model_str.startswith('gemini:') or model_str.startswith('google:'):
             provider = 'gemini'
+        elif model_str.startswith('deepseek:'):
+            provider = 'deepseek'
+        elif model_str.startswith('qwen:'):
+            provider = 'qwen'
     
     # Step 2: Check provider-specific token limit patterns
     if provider == 'openai':
@@ -692,12 +696,18 @@ def is_token_limit_exceeded(exception: Exception, model_name: str = None) -> boo
         return _check_anthropic_token_limit(exception, error_str)
     elif provider == 'gemini':
         return _check_gemini_token_limit(exception, error_str)
-    
+    elif provider == 'deepseek':
+        return _check_deepseek_token_limit(exception, error_str)
+    elif provider == 'qwen':
+        return _check_qwen_token_limit(exception, error_str)
+
     # Step 3: If provider unknown, check all providers
     return (
         _check_openai_token_limit(exception, error_str) or
         _check_anthropic_token_limit(exception, error_str) or
-        _check_gemini_token_limit(exception, error_str)
+        _check_gemini_token_limit(exception, error_str) or
+        _check_deepseek_token_limit(exception, error_str) or
+        _check_qwen_token_limit(exception, error_str)
     )
 
 def _check_openai_token_limit(exception: Exception, error_str: str) -> bool:
@@ -784,6 +794,60 @@ def _check_gemini_token_limit(exception: Exception, error_str: str) -> bool:
     
     return False
 
+def _check_deepseek_token_limit(exception: Exception, error_str: str) -> bool:
+    """Check if exception indicates DeepSeek token limit exceeded."""
+    # Analyze exception metadata
+    exception_type = str(type(exception))
+    class_name = exception.__class__.__name__
+    module_name = getattr(exception.__class__, '__module__', '')
+
+    # Check for DeepSeek-specific patterns
+    is_deepseek_exception = (
+        'deepseek' in exception_type.lower() or
+        'deepseek' in module_name.lower()
+    )
+
+    # Check for typical token limit error patterns
+    if is_deepseek_exception or 'deepseek' in error_str:
+        # Look for token-related keywords in error message
+        token_keywords = ['token', 'context', 'length', 'maximum', 'limit', 'exceeded']
+        if any(keyword in error_str for keyword in token_keywords):
+            return True
+
+    # Check for general API error patterns that might indicate token limits
+    if 'bad request' in error_str and any(keyword in error_str for keyword in ['token', 'length', 'context']):
+        return True
+
+    return False
+
+def _check_qwen_token_limit(exception: Exception, error_str: str) -> bool:
+    """Check if exception indicates Qwen token limit exceeded."""
+    # Analyze exception metadata
+    exception_type = str(type(exception))
+    class_name = exception.__class__.__name__
+    module_name = getattr(exception.__class__, '__module__', '')
+
+    # Check for Qwen/Alibaba-specific patterns
+    is_qwen_exception = (
+        'qwen' in exception_type.lower() or
+        'qwen' in module_name.lower() or
+        'alibaba' in exception_type.lower() or
+        'alibaba' in module_name.lower()
+    )
+
+    # Check for typical token limit error patterns
+    if is_qwen_exception or 'qwen' in error_str or 'alibaba' in error_str:
+        # Look for token-related keywords in error message
+        token_keywords = ['token', 'context', 'length', 'maximum', 'limit', 'exceeded']
+        if any(keyword in error_str for keyword in token_keywords):
+            return True
+
+    # Check for general API error patterns that might indicate token limits
+    if 'bad request' in error_str and any(keyword in error_str for keyword in ['token', 'length', 'context']):
+        return True
+
+    return False
+
 # NOTE: This may be out of date or not applicable to your models. Please update this as needed.
 MODEL_TOKEN_LIMITS = {
     "openai:gpt-4.1-mini": 1047576,
@@ -826,14 +890,25 @@ MODEL_TOKEN_LIMITS = {
     "bedrock:us.anthropic.claude-sonnet-4-20250514-v1:0": 200000,
     "bedrock:us.anthropic.claude-opus-4-20250514-v1:0": 200000,
     "anthropic.claude-opus-4-1-20250805-v1:0": 200000,
+    # DeepSeek models
+    "deepseek:deepseek-chat": 32768,
+    "deepseek:deepseek-coder": 32768,
+    "deepseek:deepseek-reasoner": 65536,
+    "deepseek:deepseek-r1": 65536,
+    "deepseek:deepseek-r1-distill-llama-70b": 32768,
+    # Qwen models
+    "qwen:qwen-turbo": 32768,
+    "qwen:qwen-plus": 32768,
+    "qwen:qwen-max": 32768,
+    "qwen:qwen-long": 1000000,  # Qwen-Long supports long context
 }
 
 def get_model_token_limit(model_string):
     """Look up the token limit for a specific model.
-    
+
     Args:
         model_string: The model identifier string to look up
-        
+
     Returns:
         Token limit as integer if found, None if model not in lookup table
     """
@@ -841,9 +916,31 @@ def get_model_token_limit(model_string):
     for model_key, token_limit in MODEL_TOKEN_LIMITS.items():
         if model_key in model_string:
             return token_limit
-    
+
     # Model not found in lookup table
     return None
+
+def is_model_supports_structured_output(model_name: str) -> bool:
+    """Check if a model supports structured output and function calling.
+
+    Args:
+        model_name: The model identifier string to check
+
+    Returns:
+        True if the model supports structured output, False otherwise
+    """
+    model_name = model_name.lower()
+
+    # DeepSeek R1 series has weaker function calling capabilities
+    if "deepseek-r1" in model_name:
+        return False
+
+    # Other DeepSeek and Qwen models generally support structured output
+    if model_name.startswith(("deepseek:", "qwen:")):
+        return True
+
+    # Default to True for other models (OpenAI, Anthropic, etc.)
+    return True
 
 def remove_up_to_last_ai_message(messages: list[MessageLikeRepresentation]) -> list[MessageLikeRepresentation]:
     """Truncate message history by removing up to the last AI message.
@@ -903,14 +1000,22 @@ def get_api_key_for_model(model_name: str, config: RunnableConfig):
             return api_keys.get("ANTHROPIC_API_KEY")
         elif model_name.startswith("google"):
             return api_keys.get("GOOGLE_API_KEY")
+        elif model_name.startswith("deepseek:"):
+            return api_keys.get("DEEPSEEK_API_KEY")
+        elif model_name.startswith("qwen:"):
+            return api_keys.get("QWEN_API_KEY")
         return None
     else:
-        if model_name.startswith("openai:"): 
+        if model_name.startswith("openai:"):
             return os.getenv("OPENAI_API_KEY")
         elif model_name.startswith("anthropic:"):
             return os.getenv("ANTHROPIC_API_KEY")
         elif model_name.startswith("google"):
             return os.getenv("GOOGLE_API_KEY")
+        elif model_name.startswith("deepseek:"):
+            return os.getenv("DEEPSEEK_API_KEY")
+        elif model_name.startswith("qwen:"):
+            return os.getenv("QWEN_API_KEY")
         return None
 
 def get_tavily_api_key(config: RunnableConfig):
