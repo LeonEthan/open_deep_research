@@ -3,7 +3,7 @@ from pydantic import BaseModel, Field
 import operator
 import warnings
 
-from langchain.chat_models import init_chat_model
+from open_deep_research.utils import create_configurable_model
 from langchain_core.tools import tool, BaseTool
 from langchain_core.runnables import RunnableConfig
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -196,7 +196,9 @@ async def supervisor(state: ReportState, config: RunnableConfig):
     supervisor_model = get_config_value(configurable.supervisor_model)
 
     # Initialize the model
-    llm = init_chat_model(model=supervisor_model)
+    llm = create_configurable_model().with_config({
+        "configurable": {"model": supervisor_model}
+    })
     
     # If sections have been completed, but we don't yet have the final report, then we need to initiate writing the introduction and conclusion
     if state.get("completed_sections") and not state.get("final_report"):
@@ -358,7 +360,9 @@ async def research_agent(state: SectionState, config: RunnableConfig):
     researcher_model = get_config_value(configurable.researcher_model)
     
     # Initialize the model
-    llm = init_chat_model(model=researcher_model)
+    llm = create_configurable_model().with_config({
+        "configurable": {"model": researcher_model}
+    })
 
     # Get tools based on configuration
     research_tool_list = await get_research_tools(config)

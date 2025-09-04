@@ -3,7 +3,7 @@
 import asyncio
 from typing import Literal
 
-from langchain.chat_models import init_chat_model
+
 from langchain_core.messages import (
     AIMessage,
     HumanMessage,
@@ -41,6 +41,7 @@ from open_deep_research.state import (
 )
 from open_deep_research.utils import (
     anthropic_websearch_called,
+    create_configurable_model,
     get_all_tools,
     get_api_key_for_model,
     get_model_token_limit,
@@ -53,7 +54,7 @@ from open_deep_research.utils import (
 )
 
 # Initialize a configurable model that we will use throughout the agent
-configurable_model = init_chat_model(
+configurable_model = create_configurable_model(
     configurable_fields=("model", "max_tokens", "api_key"),
 )
 
