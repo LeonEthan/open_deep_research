@@ -34,6 +34,132 @@ from open_deep_research.prompts import summarize_webpage_prompt
 from open_deep_research.state import ResearchComplete, Summary
 
 ##########################
+# Model Initialization Utils
+##########################
+
+
+def create_configurable_model(
+    configurable_fields: tuple = ("model", "max_tokens", "api_key"),
+    **kwargs
+) -> BaseChatModel:
+    """Create a configurable chat model with intelligent provider selection.
+
+    This function provides compatibility for Qwen models by automatically
+    detecting the model provider and using the appropriate initialization.
+
+    Args:
+        configurable_fields: Tuple of field names configurable at runtime
+        **kwargs: Additional arguments to pass to the model initialization
+
+    Returns:
+        BaseChatModel: Configured chat model instance
+
+    Examples:
+        >>> # For OpenAI models (uses init_chat_model)
+        >>> model = create_configurable_model()
+        >>> configured = model.with_config({
+        ...     "configurable": {"model": "openai:gpt-4"}
+        ... })
+
+        >>> # For Qwen models (uses ChatTongyi)
+        >>> model = create_configurable_model()
+        >>> configured = model.with_config({
+        ...     "configurable": {"model": "qwen:qwen-max"}
+        ... })
+    """
+    try:
+        # Try to import ChatTongyi for Qwen model support
+        from langchain_community.chat_models import ChatTongyi
+        CHATTONGYI_AVAILABLE = True
+    except ImportError:
+        CHATTONGYI_AVAILABLE = False
+        warnings.warn(
+            "ChatTongyi not available. Install dashscope for Qwen model "
+            "support: uv add dashscope",
+            UserWarning
+        )
+
+    def _create_model_with_config(config: Dict[str, Any]) -> BaseChatModel:
+        """Internal function to create model based on configuration."""
+        model_name = config.get("model", "")
+        max_tokens = config.get("max_tokens")
+        api_key = config.get("api_key")
+
+        # Check if this is a Qwen model
+        if model_name.startswith("qwen:") and CHATTONGYI_AVAILABLE:
+            # Extract the actual model name (remove "qwen:" prefix)
+            actual_model = model_name.split(":", 1)[1]
+
+            # Map common model names
+            model_mapping = {
+                "qwen3-235b-a22b-instruct-2507": "qwen3-235b-a22b-instruct-2507",
+                "qwen-turbo": "qwen-turbo",
+                "qwen-max": "qwen-max",
+                "qwen-plus": "qwen-plus"
+            }
+
+            mapped_model = model_mapping.get(actual_model, actual_model)
+
+            # Prepare ChatTongyi parameters
+            tongyi_params = {
+                "model": mapped_model,
+                **kwargs
+            }
+
+            # Add max_tokens if specified
+            if max_tokens:
+                tongyi_params["max_tokens"] = max_tokens
+
+            # Add API key if specified, otherwise use environment variable
+            if api_key:
+                tongyi_params["api_key"] = api_key
+            elif os.getenv("QWEN_API_KEY"):
+                tongyi_params["api_key"] = os.getenv("QWEN_API_KEY")
+            elif os.getenv("DASHSCOPE_API_KEY"):
+                tongyi_params["api_key"] = os.getenv("DASHSCOPE_API_KEY")
+
+            return ChatTongyi(**tongyi_params)
+        else:
+            # Use standard init_chat_model for other providers
+            init_params = {**kwargs}
+            if model_name:
+                init_params["model"] = model_name
+            if max_tokens:
+                init_params["max_tokens"] = max_tokens
+            if api_key:
+                init_params["api_key"] = api_key
+
+            return init_chat_model(**init_params)
+
+    # Create a configurable model that can switch between providers
+    base_model = init_chat_model(
+        configurable_fields=configurable_fields, **kwargs
+    )
+
+    # Override the configuration method to use our intelligent selection
+    original_with_config = base_model.with_config
+
+    def enhanced_with_config(
+        config: RunnableConfig, **config_kwargs
+    ) -> BaseChatModel:
+        """Enhanced with_config that handles Qwen models intelligently."""
+        if isinstance(config, dict) and "configurable" in config:
+            configurable_config = config["configurable"]
+            model_name = configurable_config.get("model", "")
+
+            # If it's a Qwen model, create it directly
+            if model_name.startswith("qwen:"):
+                return _create_model_with_config(configurable_config)
+
+        # Otherwise, use the original method
+        return original_with_config(config, **config_kwargs)
+
+    # Replace the method
+    base_model.with_config = enhanced_with_config
+
+    return base_model
+
+##########################
 # Tavily Search Tool Utils
 ##########################
 TAVILY_SEARCH_DESCRIPTION = (
@@ -891,16 +1017,16 @@ MODEL_TOKEN_LIMITS = {
     "bedrock:us.anthropic.claude-opus-4-20250514-v1:0": 200000,
     "anthropic.claude-opus-4-1-20250805-v1:0": 200000,
     # DeepSeek models
-    "deepseek:deepseek-chat": 32768,
-    "deepseek:deepseek-coder": 32768,
-    "deepseek:deepseek-reasoner": 65536,
-    "deepseek:deepseek-r1": 65536,
-    "deepseek:deepseek-r1-distill-llama-70b": 32768,
+    "deepseek:deepseek-chat": 128000,
+    "deepseek:deepseek-reasoner": 128000,
     # Qwen models
-    "qwen:qwen-turbo": 32768,
-    "qwen:qwen-plus": 32768,
-    "qwen:qwen-max": 32768,
-    "qwen:qwen-long": 1000000,  # Qwen-Long supports long context
+    "qwen:qwen-turbo": 131072,
+    "qwen:qwen-max": 32000,
+    "qwen:qwen3-235b-a22b-instruct-2507": 129024,
+    "qwen:qwen-long": 10000000,  # Qwen-Long supports long context
+    "qwen:qwen3-coder-plus": 997952,
+    "qwen:qwen3-coder-flash": 997952,
+    "qwen:qwen3-coder-480b-a35b-instruct": 204800,
 }
 
 def get_model_token_limit(model_string):

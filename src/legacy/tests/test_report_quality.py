@@ -5,12 +5,12 @@ import uuid
 import pytest
 import asyncio
 from pydantic import BaseModel, Field
-from langchain.chat_models import init_chat_model
+from legacy.utils import create_configurable_model
 from langsmith import testing as t
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.text import Text
+
 from rich.markdown import Markdown
 
 from langgraph.checkpoint.memory import MemorySaver
@@ -43,7 +43,13 @@ def get_evaluation_llm(eval_model=None):
     # Use provided model, then environment variable, then default
     model_to_use = eval_model or os.environ.get("EVAL_MODEL", "anthropic:claude-3-7-sonnet-latest")
     
-    criteria_eval_llm = init_chat_model(model_to_use)
+    criteria_eval_llm = create_configurable_model(
+        configurable_fields=("model", "max_tokens", "api_key")
+    ).with_config({
+        "configurable": {
+            "model": model_to_use
+        }
+    })
     return criteria_eval_llm.with_structured_output(CriteriaGrade)
 
 RESPONSE_CRITERIA_SYSTEM_PROMPT = """
@@ -169,7 +175,15 @@ def test_response_criteria_evaluation(research_agent, search_api, models, eval_m
     if research_agent == "multi_agent":
 
         # Initial messages
-        initial_msg = [{"role": "user", "content": "Give me a high-level overview of MCP (model context protocol). Keep the report to 3 main body sections. One section on the origins of MPC, one section on interesting examples of MCP servers, and one section on the future roadmap for MCP. Report should be written for a developer audience."}]
+        initial_msg = [{
+            "role": "user", 
+            "content": "Give me a high-level overview of MCP (model context "
+                      "protocol). Keep the report to 3 main body sections. "
+                      "One section on the origins of MPC, one section on "
+                      "interesting examples of MCP servers, and one section "
+                      "on the future roadmap for MCP. Report should be "
+                      "written for a developer audience."
+        }]
 
         # Checkpointer for the multi-agent approach
         checkpointer = MemorySaver()
@@ -181,8 +195,10 @@ def test_response_criteria_evaluation(research_agent, search_api, models, eval_m
             "search_api": search_api,
             "supervisor_model": models.get("supervisor_model"),
             "researcher_model": models.get("researcher_model"),
-            "ask_for_clarification": False, # Don't ask for clarification from the user and proceed to write the report
-            "process_search_results": "summarize", # Optionally summarize 
+            # Don't ask for clarification from the user and proceed to write
+            "ask_for_clarification": False,
+            # Optionally summarize
+            "process_search_results": "summarize", 
         }
         
         thread_config = {"configurable": config}
@@ -197,8 +213,15 @@ def test_response_criteria_evaluation(research_agent, search_api, models, eval_m
 
     elif research_agent == "graph":
         
-        # Topic query 
-        topic_query = "Give me a high-level overview of MCP (model context protocol). Keep the report to 3 main body sections. One section on the origins of MPC, one section on interesting examples of MCP servers, and one section on the future roadmap for MCP. Report should be written for a developer audience."
+        # Topic query
+        topic_query = (
+            "Give me a high-level overview of MCP (model context "
+            "protocol). Keep the report to 3 main body sections. "
+            "One section on the origins of MPC, one section on "
+            "interesting examples of MCP servers, and one section "
+            "on the future roadmap for MCP. Report should be "
+            "written for a developer audience."
+        )
    
         # Checkpointer for the graph approach
         checkpointer = MemorySaver()
@@ -215,20 +238,24 @@ def test_response_criteria_evaluation(research_agent, search_api, models, eval_m
             "max_search_depth": models.get("max_search_depth", 2),
         }}
         
-        async def run_graph_agent(thread):    
+        async def run_graph_agent(thread):
             # Run the graph until the interruption
-            async for event in graph.astream({"topic":topic_query}, thread, stream_mode="updates"):
+            async for event in graph.astream(
+                {"topic": topic_query}, thread, stream_mode="updates"
+            ):
                 if '__interrupt__' in event:
-                    interrupt_value = event['__interrupt__'][0].value
+                    interrupt_value = event['__interrupt__'][0].value  # noqa: F841
 
-            # Pass True to approve the report plan and proceed to write the report
-            async for event in graph.astream(Command(resume=True), thread, stream_mode="updates"):
-                # console.print(f"[dim]{event}[/dim]")
-                # console.print()
-                None
+            # Pass True to approve the report plan and proceed to write
+            async for event in graph.astream(
+                Command(resume=True), thread, stream_mode="updates"
+            ):
+                pass
             
             final_state = graph.get_state(thread)
-            report = final_state.values.get('final_report', "No report generated")
+            report = final_state.values.get(
+                'final_report', "No report generated"
+            )
             return report
     
         report = asyncio.run(run_graph_agent(thread))
@@ -239,7 +266,12 @@ def test_response_criteria_evaluation(research_agent, search_api, models, eval_m
     # Evaluate the report against our quality criteria
     eval_result = criteria_eval_structured_llm.invoke([
         {"role": "system", "content": RESPONSE_CRITERIA_SYSTEM_PROMPT},
-        {"role": "user", "content": f"""\n\n Report: \n\n{report}\n\nEvaluate whether the report meets the criteria and provide detailed justification for your evaluation."""}
+        {
+            "role": "user", 
+            "content": f"""\n\n Report: \n\n{report}\n\nEvaluate whether "
+                      "the report meets the criteria and provide detailed "
+                      "justification for your evaluation."""
+        }
     ])
 
     # Extract section headers for analysis
