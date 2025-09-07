@@ -29,6 +29,7 @@ venv/
 env/
 ENV/
 .env
+.venv
 
 # IDE specific files
 .idea/
@@ -45,6 +46,7 @@ ENV/
 htmlcov/
 .pytest_cache/
 .tox/
+.mypy_cache/
 
 # Logs
 *.log
